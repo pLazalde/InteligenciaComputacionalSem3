@@ -17,13 +17,25 @@ if __name__ == "__main__":
 
     print(f"Chatting with {MODEL} model at {URL}\n")
 
+    historial_conversacion = [
+        {'role': 'system', 'content': SYSTEM_MESSAGE}
+    ]
+
     while True:
         message = input("> ")
+        
+        if message.lower() in ['exit', 'quit']:
+            print("Conversación finalizada.")
+            break
+
+        historial_conversacion.append({'role': 'user', 'content': message})
+        
         response = client.chat.completions.create(
             model=MODEL,
-            messages=[
-                {'role': 'system', 'content': SYSTEM_MESSAGE},
-                {'role': 'user', 'content': message},
-            ]
+            messages=historial_conversacion
         )
-        print(response.choices[0].message.content)
+        
+        bot_response = response.choices[0].message.content
+        print(bot_response)
+        
+        historial_conversacion.append({'role': 'assistant', 'content': bot_response})
