@@ -77,6 +77,6 @@ if __name__ == "__main__":
     load_dotenv()
     
     # --- AGREGA ESTA LÍNEA DE DIAGNÓSTICO ---
-    print(f"DIAGNÓSTICO - LLAVE: {os.getenv('OPENAI_API_KEY')}")
+    #print(f"DIAGNÓSTICO - LLAVE: {os.getenv('OPENAI_API_KEY')}")
     
     main()

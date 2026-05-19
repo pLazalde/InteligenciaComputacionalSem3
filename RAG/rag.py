@@ -202,7 +202,7 @@ RULES:
 2. For follow-up questions (like "what's the source?", "who sent it?", "give me more details"), use the conversation history and the context to understand what the user is referring to.
 3. Crucially, when you answer using a document, always mention its source/file path (e.g., "According to data/emails/file.txt...") so the user knows where it came from.
 4. If the context does not contain any relevant information to answer the question or follow-ups, strictly reply with: "I do not have enough information in your documents to answer your question." Do not make things up.
-5. If you do not have enough information try telling the user what information is missing."""
+5. If you do not have enough information tell the user what information is missing."""
 
 
 class Assistant:
@@ -226,12 +226,10 @@ class Assistant:
         self.chunks = chunks
         self.client = client
         
-        # CORRECCIÓN: Si config ya es un diccionario resuelto, úsalo directo; 
-        # si es None, entonces sí llama a resolve_config()
         self.config = config if config is not None else resolve_config(None)
         
         self.llm_model = self.config["model"]
-        self.top_k = int(self.config["top_k"]) # Nos aseguramos de que sea un entero
+        self.top_k = int(self.config["top_k"]) 
         self.history: list[dict[str, str]] = []
 
     def ask(self, question: str, k: int | None = None) -> str:
@@ -241,38 +239,40 @@ class Assistant:
         conversation messages, and the system prompt. The assistant response is
         appended to history alongside the user message.
         """
-        # Interceptar el comando de limpieza de historial
+        #comando de limpieza de historial
         if question.strip().lower() == "/clear":
             self.clear_history()
             return "Conversation history cleared."
 
-        # 1. Búsqueda inteligente para seguimiento (Solo si usa pronombres de contexto)
+        #Busqueda si usa pronombres de contexto
         search_query = question
         follow_up_words = ["this", "that", "it", "source", "who", "where", "details", "file"]
         
-        # Solo concatenamos si es una frase corta Y contiene palabras de seguimiento explícitas
+        #concatenamos si es una frase corta y contiene palabras de seguimiento explícitas
         if self.history and len(question.split()) < 5:
             if any(word in question.lower() for word in follow_up_words):
                 last_user_msg = next((msg["content"] for msg in reversed(self.history) if msg["role"] == "user"), "")
                 if last_user_msg:
                     search_query = f"{last_user_msg} {question}"
 
-        # 2. Recuperar el contexto desde FAISS sin filtros restrictivos de score
+        #recuperar el contexto desde FAISS sin filtros restrictivos de score
         search_k = k if k is not None else self.top_k
         retrieved_docs = retrieve(search_query, self.index, self.model, self.chunks, search_k)
 
-        # --- BLOQUE DE DIAGNÓSTICO MEJORADO ---
-        print("\n🔍 [DEBUG] ESTADO DE LA BÚSQUEDA:")
-        print(f"  • Vectores totales en el índice: {self.index.ntotal}")
-        print(f"  • Valor de K (cuántos chunks busca): {search_k}")
-        print(f"  • Query enviado a FAISS: '{search_query}'")
-        
-        retrieved_docs = retrieve(search_query, self.index, self.model, self.chunks, search_k)
-        
-        print(f"  • Chunks recuperados por retrieve(): {len(retrieved_docs)}")
-        print("--------------------------------------------------\n")
+        #Bloque de debug, generado por GeminiAI
 
-        # 3. Formatear los documentos recuperados (Se envían TODOS al LLM para no dejarlo ciego)
+        # --- BLOQUE DE DIAGNÓSTICO  ---
+        #print("\n🔍 [DEBUG] ESTADO DE LA BÚSQUEDA:")
+        #print(f"  • Vectores totales en el índice: {self.index.ntotal}")
+        #print(f"  • Valor de K (cuántos chunks busca): {search_k}")
+        #print(f"  • Query enviado a FAISS: '{search_query}'")
+        
+        #retrieved_docs = retrieve(search_query, self.index, self.model, self.chunks, search_k)
+        
+        #print(f"  • Chunks recuperados por retrieve(): {len(retrieved_docs)}")
+        #print("--------------------------------------------------\n")
+
+        #formatear los documentos recuperados
         context_blocks = []
         for doc in retrieved_docs:
             source = doc["metadata"].get("source", "Unknown")
@@ -281,31 +281,29 @@ class Assistant:
         
         formatted_context = "\n\n".join(context_blocks)
         
-        # 4. Construir el System Prompt dinámico
+        # construccion de el system prompt 
         system_content = f"{SYSTEM_PROMPT}\n\n=== RETRIEVED CONTEXT ===\n"
         if formatted_context:
             system_content += formatted_context
         else:
             system_content += "NO RELEVANT DOCUMENTS FOUND IN VECTOR INDEX."
 
-        # 5. Armar la lista completa de mensajes
+        # lista de mensajes
         messages = [{"role": "system", "content": system_content}]
         messages.extend(self.history)
         messages.append({"role": "user", "content": question})
 
-        # 6. Realizar la llamada al modelo de lenguaje
+        # llamada al modelo de lenguaje
         response = self.client.chat.completions.create(
             model=self.llm_model,
             messages=messages,
             temperature=0.2 
         )
         
-        # Guardamos la respuesta RAW (limpia) del modelo
         llm_answer = response.choices[0].message.content
-        # Creamos una copia que es la que modificaremos para mostrar en pantalla
         display_answer = llm_answer
 
-        # 7. Inyección de Hyperlinks (SOLO para la pantalla, NO para el historial)
+        # Inyeccion de Hyperlinks 
         if retrieved_docs and "I do not have enough information" not in llm_answer:
             sources_to_display = set()
             for doc in retrieved_docs:
@@ -324,8 +322,6 @@ class Assistant:
                 sources_text = "\n📌 *Sources (Cmd/Ctrl + Click to open):* " + ", ".join(formatted_links)
                 display_answer += sources_text # Se lo agregamos a lo que ve el usuario
 
-        # 8. Actualizar el historial interno con la respuesta LIMPIA del LLM
-        # Al guardar 'llm_answer', evitamos que el modelo intente copiar los links en el futuro
         self.history.append({"role": "user", "content": question})
         self.history.append({"role": "assistant", "content": llm_answer})
 
