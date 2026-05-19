@@ -66,6 +66,7 @@ def main():
             assistant.clear_history()
             subprocess.call('cls' if os.name == 'nt' else 'clear')
             print("\nConversation history cleared.\n")
+            print(WELCOME)
             continue
 
         response = assistant.ask(question)
@@ -74,4 +75,8 @@ def main():
 
 if __name__ == "__main__":
     load_dotenv()
+    
+    # --- AGREGA ESTA LÍNEA DE DIAGNÓSTICO ---
+    print(f"DIAGNÓSTICO - LLAVE: {os.getenv('OPENAI_API_KEY')}")
+    
     main()

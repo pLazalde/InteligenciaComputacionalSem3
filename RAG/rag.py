@@ -12,7 +12,7 @@ from openai import OpenAI
 
 # Default configs
 DEFAULT_DATA_DIR = "data"
-DEFAULT_EMBEDDING_MODEL = MODEL
+DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 DEFAULT_LLM_MODEL = "gpt-4.1-mini"
 DEFAULT_CHUNK_SIZE = 256
 DEFAULT_CHUNK_OVERLAP = 32
@@ -70,7 +70,38 @@ def load_documents(data_dir: str = DEFAULT_DATA_DIR) -> list[Document]:
     as `page_content` and includes metadata for the source file path and
     document type.
     """
-    pass
+    docs = []
+    folders = ["emails", "notes", "sms", "calendar"]
+    
+    for folder in folders:
+        folder_path = os.path.join(data_dir, folder)
+        
+        # Si la carpeta no existe, se salta a la siguiente
+        if not os.path.exists(folder_path):
+            continue
+            
+        # Buscar todos los archivos que terminen en .txt usando globmod
+        pattern = os.path.join(folder_path, "*.txt")
+        for file_path in globmod.glob(pattern):
+            try:
+                # Abrimos y leemos el contenido del archivo
+                with open(file_path, "r", encoding="utf-8") as f:
+                    text = f.read()
+                
+                # Creamos el documento inyectando los metadatos obligatorios
+                docs.append(
+                    Document(
+                        page_content=text, 
+                        metadata={
+                            "source": file_path, 
+                            "type": folder
+                        }
+                    )
+                )
+            except Exception as e:
+                print(f"No se pudo leer el archivo {file_path}: {e}")
+            
+    return docs
 
 
 def split_documents(
@@ -83,7 +114,15 @@ def split_documents(
     The resulting chunked Document objects use the configured chunk size and
     overlap while preserving the original document metadata.
     """
-    pass
+    # Instanciamos el divisor de texto de LangChain con los parámetros configurables
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+    )
+    
+    # split_documents toma la lista de objetos Document, los divide y 
+    # automaticamente clona los metadatos originales en cada nuevo fragmento.
+    return splitter.split_documents(docs)
 
 
 def build_index(
@@ -95,7 +134,28 @@ def build_index(
     The index contains normalized float32 embeddings generated from each
     chunk's text with the provided embedding model.
     """
-    pass
+    if not chunks:
+        # Si la lista está vacia, regresamos un indice vacio basado en la dimensión del modelo
+        dimension = embedding_model.get_sentence_embedding_dimension()
+        return faiss.IndexFlatIP(dimension)
+
+    #extraer unicamente el texto de los chunks
+    texts = [chunk.page_content for chunk in chunks]
+    
+    #generar los embeddings
+    embeddings = embedding_model.encode(texts, normalize_embeddings=True)
+    
+    embeddings = np.array(embeddings).astype("float32")
+    
+    #obtener la dimension de los vectores
+    dimension = embedding_model.get_embedding_dimension()    
+    #inicializar el indice de Inner Product
+    index = faiss.IndexFlatIP(dimension)
+    
+    # anadir los vectores al indice
+    index.add(embeddings)
+    
+    return index
 
 
 def retrieve(
@@ -110,10 +170,39 @@ def retrieve(
     Results are ordered by similarity and include the chunk text, similarity
     score, and metadata for each matching chunk.
     """
-    pass
+    #convertir la pregunta a un embedding
+    query_embedding = model.encode([query], normalize_embeddings=True)
+    
+    #asegurarnos de que sea un array de numpy de tipo float32 para FAISS
+    query_embedding = np.array(query_embedding).astype("float32")
+    
+    #buscar en el índice FAISS los 'k' vectores más cercanos
+    distances, indices = index.search(query_embedding, k)
+    
+    results = []
+    
+    # FAISS devuelve matrices 2D 
+    for dist, idx in zip(distances[0], indices[0]):
+        if idx == -1:
+            continue
+            
+        results.append({
+            "text": chunks[idx].page_content,
+            "score": float(dist), 
+            "metadata": chunks[idx].metadata
+        })
+        
+    return results
 
 
-SYSTEM_PROMPT = ""
+SYSTEM_PROMPT = """You are a helpful and friendly personal digital assistant. You have access to the user's personal documents (emails, notes, SMS, and calendar events) provided in the RETRIEVED CONTEXT below.
+
+RULES:
+1. Answer the user's questions based on the provided RETRIEVED CONTEXT and the conversation history.
+2. For follow-up questions (like "what's the source?", "who sent it?", "give me more details"), use the conversation history and the context to understand what the user is referring to.
+3. Crucially, when you answer using a document, always mention its source/file path (e.g., "According to data/emails/file.txt...") so the user knows where it came from.
+4. If the context does not contain any relevant information to answer the question or follow-ups, strictly reply with: "I do not have enough information in your documents to answer your question." Do not make things up.
+5. If you do not have enough information try telling the user what information is missing."""
 
 
 class Assistant:
@@ -136,9 +225,13 @@ class Assistant:
         self.model = model
         self.chunks = chunks
         self.client = client
-        self.config = resolve_config(config)
+        
+        # CORRECCIÓN: Si config ya es un diccionario resuelto, úsalo directo; 
+        # si es None, entonces sí llama a resolve_config()
+        self.config = config if config is not None else resolve_config(None)
+        
         self.llm_model = self.config["model"]
-        self.top_k = self.config["top_k"]
+        self.top_k = int(self.config["top_k"]) # Nos aseguramos de que sea un entero
         self.history: list[dict[str, str]] = []
 
     def ask(self, question: str, k: int | None = None) -> str:
@@ -148,14 +241,102 @@ class Assistant:
         conversation messages, and the system prompt. The assistant response is
         appended to history alongside the user message.
         """
-        pass
+        # Interceptar el comando de limpieza de historial
+        if question.strip().lower() == "/clear":
+            self.clear_history()
+            return "Conversation history cleared."
+
+        # 1. Búsqueda inteligente para seguimiento (Solo si usa pronombres de contexto)
+        search_query = question
+        follow_up_words = ["this", "that", "it", "source", "who", "where", "details", "file"]
+        
+        # Solo concatenamos si es una frase corta Y contiene palabras de seguimiento explícitas
+        if self.history and len(question.split()) < 5:
+            if any(word in question.lower() for word in follow_up_words):
+                last_user_msg = next((msg["content"] for msg in reversed(self.history) if msg["role"] == "user"), "")
+                if last_user_msg:
+                    search_query = f"{last_user_msg} {question}"
+
+        # 2. Recuperar el contexto desde FAISS sin filtros restrictivos de score
+        search_k = k if k is not None else self.top_k
+        retrieved_docs = retrieve(search_query, self.index, self.model, self.chunks, search_k)
+
+        # --- BLOQUE DE DIAGNÓSTICO MEJORADO ---
+        print("\n🔍 [DEBUG] ESTADO DE LA BÚSQUEDA:")
+        print(f"  • Vectores totales en el índice: {self.index.ntotal}")
+        print(f"  • Valor de K (cuántos chunks busca): {search_k}")
+        print(f"  • Query enviado a FAISS: '{search_query}'")
+        
+        retrieved_docs = retrieve(search_query, self.index, self.model, self.chunks, search_k)
+        
+        print(f"  • Chunks recuperados por retrieve(): {len(retrieved_docs)}")
+        print("--------------------------------------------------\n")
+
+        # 3. Formatear los documentos recuperados (Se envían TODOS al LLM para no dejarlo ciego)
+        context_blocks = []
+        for doc in retrieved_docs:
+            source = doc["metadata"].get("source", "Unknown")
+            doc_type = doc["metadata"].get("type", "Unknown")
+            context_blocks.append(f"--- Document File: {source} (Type: {doc_type}) ---\n{doc['text']}")
+        
+        formatted_context = "\n\n".join(context_blocks)
+        
+        # 4. Construir el System Prompt dinámico
+        system_content = f"{SYSTEM_PROMPT}\n\n=== RETRIEVED CONTEXT ===\n"
+        if formatted_context:
+            system_content += formatted_context
+        else:
+            system_content += "NO RELEVANT DOCUMENTS FOUND IN VECTOR INDEX."
+
+        # 5. Armar la lista completa de mensajes
+        messages = [{"role": "system", "content": system_content}]
+        messages.extend(self.history)
+        messages.append({"role": "user", "content": question})
+
+        # 6. Realizar la llamada al modelo de lenguaje
+        response = self.client.chat.completions.create(
+            model=self.llm_model,
+            messages=messages,
+            temperature=0.2 
+        )
+        
+        # Guardamos la respuesta RAW (limpia) del modelo
+        llm_answer = response.choices[0].message.content
+        # Creamos una copia que es la que modificaremos para mostrar en pantalla
+        display_answer = llm_answer
+
+        # 7. Inyección de Hyperlinks (SOLO para la pantalla, NO para el historial)
+        if retrieved_docs and "I do not have enough information" not in llm_answer:
+            sources_to_display = set()
+            for doc in retrieved_docs:
+                source_path = doc["metadata"].get("source")
+                if source_path:
+                    if source_path in llm_answer or os.path.basename(source_path) in llm_answer:
+                        sources_to_display.add(source_path)
+            
+            if sources_to_display:
+                formatted_links = []
+                for s in sources_to_display:
+                    abs_path = os.path.abspath(s)
+                    osc8_link = f"\033]8;;file://{abs_path}\033\\{s}\033]8;;\033\\"
+                    formatted_links.append(osc8_link)
+                
+                sources_text = "\n📌 *Sources (Cmd/Ctrl + Click to open):* " + ", ".join(formatted_links)
+                display_answer += sources_text # Se lo agregamos a lo que ve el usuario
+
+        # 8. Actualizar el historial interno con la respuesta LIMPIA del LLM
+        # Al guardar 'llm_answer', evitamos que el modelo intente copiar los links en el futuro
+        self.history.append({"role": "user", "content": question})
+        self.history.append({"role": "assistant", "content": llm_answer})
+
+        return display_answer
 
     def clear_history(self) -> None:
         """Empties the conversation history."""
         self.history.clear()
 
     @classmethod
-    def from_config(cls, config: dict[str, Any] | None = None) -> Assistant:
+    def from_config(cls, config: dict[str, Any] | None = None) -> "Assistant":
         """Initializes the components required by the assistant and instantiates it
 
         The pipeline includes resolved configuration, loaded documents, chunked
