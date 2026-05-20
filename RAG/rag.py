@@ -163,7 +163,8 @@ def retrieve(
         index: faiss.IndexFlatIP,
         model: SentenceTransformer,
         chunks: list[Document],
-        k: int = DEFAULT_TOP_K,
+        k: int = 4, 
+        filter_type: str | None = None 
 ) -> list[dict]:
     """Gets the most relevant chunks for a query.
 
@@ -233,43 +234,48 @@ class Assistant:
         self.history: list[dict[str, str]] = []
 
     def ask(self, question: str, k: int | None = None) -> str:
-        """Generates an answer from the retrieved context and conversation history.
-
-        The current question is combined with relevant document chunks, previous
-        conversation messages, and the system prompt. The assistant response is
-        appended to history alongside the user message.
-        """
-        #comando de limpieza de historial
         if question.strip().lower() == "/clear":
             self.clear_history()
             return "Conversation history cleared."
 
-        #Busqueda si usa pronombres de contexto
-        search_query = question
+        # Filtro de Etiquetas
+        filter_type = None
+        tags_mapping = {
+            "/notes": "notes",
+            "/sms": "sms",
+            "/calendar": "calendar",
+            "/email": "emails",
+            "/emails": "emails" 
+        }
+        
+        clean_question = question
+        for tag, folder_name in tags_mapping.items():
+            if tag in question.lower():
+                filter_type = folder_name
+                # Limpiamos la etiqueta de la pregunta para que FAISS solo busque el texto real
+                clean_question = clean_question.lower().replace(tag, "").strip()
+                break
+
+        # busqueda usando la pregunta limpia
+        search_query = clean_question
         follow_up_words = ["this", "that", "it", "source", "who", "where", "details", "file"]
         
-        #concatenamos si es una frase corta y contiene palabras de seguimiento explícitas
-        if self.history and len(question.split()) < 5:
-            if any(word in question.lower() for word in follow_up_words):
+        if self.history and len(clean_question.split()) < 5:
+            if any(word in clean_question.lower() for word in follow_up_words):
                 last_user_msg = next((msg["content"] for msg in reversed(self.history) if msg["role"] == "user"), "")
                 if last_user_msg:
-                    search_query = f"{last_user_msg} {question}"
+                    search_query = f"{last_user_msg} {clean_question}"
 
-        #recuperar el contexto desde FAISS sin filtros restrictivos de score
+        # recuperar el contexto desde FAISS 
         search_k = k if k is not None else self.top_k
-        retrieved_docs = retrieve(search_query, self.index, self.model, self.chunks, search_k)
-
-        #Bloque de debug, generado por GeminiAI
-
-        # --- BLOQUE DE DIAGNÓSTICO  ---
+        retrieved_docs = retrieve(search_query, self.index, self.model, self.chunks, search_k, filter_type=filter_type)
+        
+        #GENERADO POR GEMINIAI
+        # --- BLOQUE DE DIAGNÓSTICO MEJORADO ---
         #print("\n🔍 [DEBUG] ESTADO DE LA BÚSQUEDA:")
-        #print(f"  • Vectores totales en el índice: {self.index.ntotal}")
-        #print(f"  • Valor de K (cuántos chunks busca): {search_k}")
-        #print(f"  • Query enviado a FAISS: '{search_query}'")
-        
-        #retrieved_docs = retrieve(search_query, self.index, self.model, self.chunks, search_k)
-        
-        #print(f"  • Chunks recuperados por retrieve(): {len(retrieved_docs)}")
+        #print(f"  • Filtro Etiqueta: {filter_type if filter_type else 'Ninguno'}")
+        #print(f"  • Valor de K final: {len(retrieved_docs)} documentos obtenidos")
+        #print(f"  • Query limpio a FAISS: '{search_query}'")
         #print("--------------------------------------------------\n")
 
         #formatear los documentos recuperados

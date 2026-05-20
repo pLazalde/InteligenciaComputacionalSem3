@@ -16,14 +16,17 @@ from rag import Assistant
 from dotenv import load_dotenv
 
 WELCOME = """
-╔══════════════════════════════════════════════════════╗
-║           Personal Digital Assistant                 ║
-║                                                      ║
-║  Ask me about emails, notes, SMS, and calendar.      ║
-║  Type '/clear' to reset conversation history.        ║
-║  Try: what's the address for Laura's surprise party? ║
-║  Type '/exit' to leave.                              ║
-╚══════════════════════════════════════════════════════╝
+╔════════════════════════════════════════════════════════╗
+║           Personal Digital Assistant                   ║
+║                                                        ║
+║  Ask me about emails, notes, SMS, and calendar.        ║
+║  Type '/clear' to reset conversation history.          ║
+║  Try: what's the address for Laura's surprise party?   ║
+║  Filtering Tags: /notes, /sms, /calendar or  /email    ║
+║  Try: search in my /calendar for dentist appointment   ║
+║  Type '/exit' to leave.                                ║
+║                                                        ║
+╚════════════════════════════════════════════════════════╝
 """
 
 
