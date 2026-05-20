@@ -319,7 +319,7 @@ class Assistant:
                     osc8_link = f"\033]8;;file://{abs_path}\033\\{s}\033]8;;\033\\"
                     formatted_links.append(osc8_link)
                 
-                sources_text = "\n📌 *Sources (Cmd/Ctrl + Click to open):* " + ", ".join(formatted_links)
+                sources_text = "\n*Sources (Cmd/Ctrl + Click to open):* " + ", ".join(formatted_links)
                 display_answer += sources_text # Se lo agregamos a lo que ve el usuario
 
         self.history.append({"role": "user", "content": question})
